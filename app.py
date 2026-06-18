@@ -20,7 +20,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-title">📊 HỆ THỐNG LỌC LỊCH SÁT HẠCH TỰ ĐỘNG</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Thuật toán phẳng hóa văn bản - Khắc phục hoàn toàn lỗi treo ứng dụng</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Cập nhật tương thích Streamlit mới - Trích xuất siêu tốc</div>', unsafe_allow_html=True)
 st.write("---")
 
 uploaded_file = st.file_uploader("Kéo và thả file PDF Thông báo lịch sát hạch vào đây:", type=["pdf", "txt"])
@@ -36,32 +36,27 @@ def extract_text_from_pdf(file):
 
 def parse_pdf_content(raw_text):
     # --- BƯỚC 1: PHẲNG HÓA VĂN BẢN VÀ LÀM SẠCH NHIỄU ---
-    # Thay thế tất cả các dấu ngắt dòng thừa bằng khoảng trắng để tránh làm gãy bảng dữ liệu
     text_flat = raw_text.replace('\r\n', ' ').replace('\n', ' ')
     text_flat = text_flat.replace('"', '').replace(' , ', ' ')
     text_flat = re.sub(r'\s+', ' ', text_flat)  # Gom nhiều khoảng trắng liên tiếp lại thành 1
     
     # --- BƯỚC 2: CẮT KHỐI VĂN BẢN DỰA TRÊN NGÀY THI (ANCHOR SPLITTING) ---
-    # Tìm tất cả các vị trí xuất hiện của ngày thi dạng dd/mm/yyyy
     date_positions = [m.start() for m in re.finditer(r'\b\d{2}/\d{1,2}/\d{4}\b', text_flat)]
     
     if not date_positions:
         return []
         
     blocks = []
-    # Chia nhỏ văn bản thành các khối tương ứng dựa theo vị trí ngày thi
     start_pos = 0
     for pos in date_positions:
-        # Lấy một đoạn văn bản bao gồm cả phần nội dung trước ngày thi (khoảng 300 ký tự) để tìm tên cơ sở
         chunk_start = max(0, start_pos - 300) if start_pos > 0 else 0
         blocks.append(text_flat[chunk_start:pos + 500])
         start_pos = pos
-    # Khối dữ liệu cuối cùng
     blocks.append(text_flat[max(0, start_pos - 300):])
     
     final_list = []
     stt_counter = 1
-    seen_dates = set() # Chống trùng lặp dữ liệu khi quét nhiều vòng
+    seen_dates = set() 
     
     # --- BƯỚC 3: TRÍCH XUẤT CÁC TRƯỜNG THÔNG TIN CHI TIẾT ---
     for block in blocks:
@@ -76,7 +71,6 @@ def parse_pdf_content(raw_text):
                 continue
             ngay_thi = date_match.group(1)
             
-            # Kết hợp ngày thi và ngữ cảnh để chống trùng lặp dòng dữ liệu
             unique_key = f"{ngay_thi}_{block[:50]}"
             if unique_key in seen_dates:
                 continue
@@ -84,14 +78,11 @@ def parse_pdf_content(raw_text):
             
             # 2. Phân tách tìm Cơ sở đào tạo
             co_so = "Trung tâm Nguyễn Trình"
-            # Cắt phần văn bản đứng trước ngày thi để dò tìm tên trường
             text_before_date = block[:block.find(ngay_thi)]
             
-            # Tìm kiếm các từ khóa đặc trưng của Cơ sở đào tạo
             cs_matches = re.findall(r'(Trung tâm GDNN[^\,]*|Trung tâm đào tạo[^\,]*|Công ty Cổ phần[^\,]*|Trung tâm KTNV[^\,]*)', text_before_date, re.IGNORECASE)
             if cs_matches:
                 candidate = cs_matches[-1].strip()
-                # Loại bỏ các ký tự phân tách bảng rác ở đầu chuỗi
                 candidate = re.sub(r'^[-–\s\.,\|]+', '', candidate).strip()
                 if len(candidate) > 10 and "hạng" not in candidate.lower():
                     co_so = candidate
@@ -101,19 +92,16 @@ def parse_pdf_content(raw_text):
             hang_matches = re.findall(r'(Hạng\s+[A-Z0-9,\s\-\/]+)', block, re.IGNORECASE)
             for h in hang_matches:
                 h_clean = re.sub(r'\s+', ' ', h).strip()
-                # Giới hạn độ dài chuỗi hạng tránh nuốt sang phần chữ khác
                 if len(h_clean) < 40 and h_clean not in hang_candidates:
                     hang_candidates.append(h_clean)
             hang_xe = " | ".join(hang_candidates) if hang_candidates else "Hạng A1, A"
             
             # 4. Trích xuất Số lượng học viên dự kiến
             qty_candidates = []
-            # Tìm tất cả số nguyên tách biệt có từ 2 đến 3 chữ số trong khối xung quanh ngày thi
             numbers = re.findall(r'\b\d{2,3}\b', block)
             for num in numbers:
                 day_part = ngay_thi.split('/')[0]
                 month_part = ngay_thi.split('/')[1]
-                # Loại bỏ số ngày, số tháng thi, hoặc số hiệu đường quốc lộ dính kèm (ví dụ: đường 14/9)
                 if num != day_part and num != month_part and num != "14" and num != "24":
                     if num not in qty_candidates:
                         qty_candidates.append(num)
@@ -124,12 +112,10 @@ def parse_pdf_content(raw_text):
             addr_match = re.search(r'(Địa chỉ:[^.]*)', block, re.IGNORECASE)
             if addr_match:
                 dia_diem_raw = addr_match.group(1).strip()
-                # Khử lỗi hiển thị mã Latinh tự sinh từ tệp PDF gốc như $\hat{A}p$ -> "Ấp"
                 dia_diem_raw = re.sub(r'\$\\hat\{A\}p\$', 'Ấp', dia_diem_raw)
-                dia_diem_raw = re.sub(r'\$\dot\{A\}p\$', 'Ấp', dia_diem_raw)
-                dia_diem = re.sub(r'\s+', ' ', dia_diem_raw)
+                dia_diem_raw = re.sub(r'\s+', ' ', dia_diem_raw)
+                dia_diem = dia_diem_raw
                 
-            # Chuẩn hóa khoảng trắng của cơ sở đào tạo trước khi xuất bản
             co_so_clean = re.sub(r'\s+', ' ', co_so).strip()
             
             final_list.append({
@@ -251,7 +237,7 @@ if uploaded_file is not None:
     file_type = uploaded_file.name.split(".")[-1].lower()
     
     if file_type == "pdf":
-        with st.spinner("🔄 Đang chạy thuật toán phẳng hóa siêu tốc..."):
+        with st.spinner("🔄 Đang chạy thuật toán xử lý dữ liệu..."):
             raw_text = extract_text_from_pdf(uploaded_file)
     else:
         raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
@@ -261,9 +247,11 @@ if uploaded_file is not None:
         
         if parsed_data:
             df_display = pd.DataFrame(parsed_data).drop(columns=["STT"])
-            st.success(f"🎉 Xuất sắc! Thuật toán phẳng hóa đã tách thành công {len(parsed_data)} lịch thi liên quan tới Nguyễn Trình!")
+            st.success(f"🎉 Xuất sắc! Hệ thống đã bóc tách thành công {len(parsed_data)} lịch trình sát hạch.")
             
-            st.dataframe(df_display, use_container_width=True)
+            # Đồng bộ cấu trúc hiển thị mới: sử dụng thuộc tính width='stretch'
+            st.dataframe(df_display, width='stretch')
+            
             st.write("---")
             st.subheader("📥 TẢI FILE ĐÃ ĐỊNH DẠNG ĐẸP VỀ MÁY:")
             
@@ -275,15 +263,15 @@ if uploaded_file is not None:
                 st.download_button(
                     label="🟢 Tải file EXCEL (.xlsx) - Đã kẻ ô & giãn cột",
                     data=excel_bytes,
-                    file_name="Lich_Thi_Nguyen_Trinh_Moi.xlsx",
+                    file_name="Lich_Thi_Nguyen_Trinh.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             with col2:
                 st.download_button(
                     label="🔵 Tải file WORD (.docx) - Chuẩn văn bản in ấn",
                     data=word_bytes,
-                    file_name="Lich_Thi_Nguyen_Trinh_Moi.docx",
+                    file_name="Lich_Thi_Nguyen_Trinh.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
         else:
-            st.warning("⚠️ Không tìm thấy thông tin lịch thi nào liên quan đến Nguyễn Trình trong file này.")
+            st.warning("⚠️ Không tìm thấy thông tin lịch thi nào liên quan đến Nguyễn Trình.")
