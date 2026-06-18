@@ -20,7 +20,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-title">📊 HỆ THỐNG LỌC LỊCH SÁT HẠCH TỰ ĐỘNG</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Thuật toán quét dòng thông minh - Chống treo ứng dụng</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Thuật toán quét dòng độc lập - Khử lỗi treo ứng dụng</div>', unsafe_allow_html=True)
 st.write("---")
 
 uploaded_file = st.file_uploader("Kéo và thả file PDF Thông báo lịch sát hạch vào đây:", type=["pdf", "txt"])
@@ -35,7 +35,7 @@ def extract_text_from_pdf(file):
     return full_text
 
 def parse_pdf_content(raw_text):
-    # --- BƯỚC 1: LÀM SẠCH VÀ CHUẨN HÓA TOÀN BỘ VĂN BẢN VỀ DẠNG DÒNG THUẦN ---
+    # --- BƯỚC 1: LÀM SẠCH VÀ CHUẨN HÓA VĂN BẢN VỀ DẠNG DÒNG THUẦN ---
     raw_lines = raw_text.split('\n')
     cleaned_lines = []
     
@@ -50,7 +50,7 @@ def parse_pdf_content(raw_text):
     stt_counter = 1
     n = len(cleaned_lines)
     
-    # --- BƯỚC 2: THUẬT TOÁN QUÈT MỎ NEO (ANCHOR SCANNING) THEO NGÀY THI ---
+    # --- BƯỚC 2: THUẬT TOÁN QUÉT MỎ NEO (ANCHOR SCANNING) THEO NGÀY THI ---
     for i in range(n):
         current_line = cleaned_lines[i]
         
@@ -60,7 +60,7 @@ def parse_pdf_content(raw_text):
         if date_match:
             ngay_thi = date_match.group(1)
             
-            # Khởi tạo vùng tìm kiếm thông tin xung quanh ngày thi
+            # Khởi tạo vùng chứa thông tin cho khối dữ liệu xung quanh ngày thi
             co_so_candidates = []
             hang_candidates = []
             qty_candidates = []
@@ -79,7 +79,7 @@ def parse_pdf_content(raw_text):
             for j in range(i, min(n, i+5)):
                 line_lower = cleaned_lines[j]
                 
-                # Tìm kiếm chuỗi Địa chỉ / Địa điểm
+                # Tìm kiếm chuỗi Địa chỉ / Địa điểm tổ chức sát hạch
                 if "địa chỉ:" in line_lower.lower() or "trung tâm giáo dục" in line_lower.lower() or "sân tập" in line_lower.lower():
                     if not dia_diem_text:
                         dia_diem_text = line_lower
@@ -92,21 +92,21 @@ def parse_pdf_content(raw_text):
                     if h.strip() not in hang_candidates:
                         hang_candidates.append(h.strip())
                         
-                # Tìm số lượng học viên (Số nguyên tách biệt từ 2-3 chữ số)
-                numbers = re.findall(r'\b\d{2 organiz,3}\b|\b\d{2,3}\b', line_lower)
+                # Tìm số lượng học viên (Số nguyên tách biệt từ 2 đến 3 chữ số)
+                numbers = re.findall(r'\b\d{2,3}\b', line_lower)
                 for num in numbers:
-                    # Bỏ qua nếu số đó trùng với ngày hoặc tháng thi
+                    # Bỏ qua nếu số lượng trùng khớp với số ngày hoặc số tháng thi
                     day_part = ngay_thi.split('/')[0]
                     month_part = ngay_thi.split('/')[1]
                     if num != day_part and num != month_part and num != "14": # bỏ qua số đường 14/9
                         if num not in qty_candidates:
                             qty_candidates.append(num)
 
-            # --- BƯỚC 3: BỘ LỌC ĐIỀU KIỆN RIÊNG CHO NGUYỄN TRÌNH ---
+            # --- BƯỚC 3: BỘ LỌC ĐIỀU KIỆN CHỈ LẤY LỊCH LIÊN QUAN ĐẾN NGUYỄN TRÌNH ---
             combined_context = (co_so_dao_tao + " " + dia_diem_text).lower()
             if "nguyễn trình" in combined_context or "nguyễn trinh" in combined_context:
                 
-                # Làm sạch dữ liệu đầu ra văn bản hành chính
+                # Làm sạch văn bản đầu ra
                 co_so_final = re.sub(r'^[-\s\.]+', '', co_so_dao_tao).strip()
                 co_so_final = re.sub(r'\s+', ' ', co_so_final)
                 
@@ -117,7 +117,7 @@ def parse_pdf_content(raw_text):
                     dia_diem_text = "Trung tâm Sát hạch lái xe Nguyễn Trình (Vĩnh Long)"
                 
                 dia_diem_final = re.sub(r'\s+', ' ', dia_diem_text).strip()
-                # Khử lỗi ký tự hiển thị mã Latinh tự sinh từ tệp hành chính
+                # Khử lỗi ký tự hiển thị mã hóa Latinh tự sinh từ tệp PDF như $\hat{A}p$ -> "Ấp"
                 dia_diem_final = re.sub(r'\$\\hat\{A\}p\$', 'Ấp', dia_diem_final)
                 dia_diem_final = re.sub(r'\$\dot\{A\}p\$', 'Ấp', dia_diem_final)
                 
