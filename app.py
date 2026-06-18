@@ -35,66 +35,120 @@ def extract_text_from_pdf(file):
     return full_text
 
 def parse_pdf_content(raw_text):
-    # Sử dụng Regex bóc tách các ô dữ liệu dựa trên cấu trúc dấu ngoặc kép "" của bảng văn bản
-    pattern = r'"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"'
-    matches = re.findall(pattern, raw_text)
+    # Bước 1: Tách văn bản thành các dòng độc lập và dọn dẹp khoảng trắng thừa
+    raw_lines = raw_text.split('\n')
+    lines = []
+    for line in raw_lines:
+        cleaned = line.strip()
+        # Loại bỏ các ký tự bọc ngoặc kép rác do công cụ OCR tạo ra nếu có
+        cleaned = re.sub(r'^["\s,]+|["\s,]+$', '', cleaned)
+        if cleaned:
+            lines.append(cleaned)
+            
+    # Bước 2: Gom cụm các dòng dựa trên sự xuất hiện của Ngày thi (dd/mm/yyyy)
+    blocks = []
+    current_block = []
     
+    for line in lines:
+        # Kiểm tra xem dòng này có chứa ngày thi hay không
+        if re.search(r'\b\d{2}/\d{1,2}/\d{4}\b', line):
+            if current_block:
+                blocks.append(current_block)
+            current_block = [line]
+        else:
+            if current_block:
+                current_block.append(line)
+                
+    if current_block:
+        blocks.append(current_block)
+        
     final_list = []
     stt = 1
     
-    for match in matches:
-        col_stt = match[0].strip()
-        co_so = match[1].strip()
-        hang_va_so_luong = match[2].strip()
-        thoi_gian = match[3].strip()
-        dia_diem = match[4].strip()
+    # Bước 3: Phân tích cú pháp từng khối dữ liệu đã gom cụm
+    for block in blocks:
+        # Hợp nhất khối văn bản thành một chuỗi thống nhất phục vụ tìm kiếm
+        full_block_text = " \n ".join(block)
+        full_block_lower = full_block_text.lower()
         
-        # Loại bỏ dòng tiêu đề bảng nếu có lọt vào
-        if "Cơ sở đào tạo" in co_so or "Số lượng" in col_stt:
-            continue
+        # ĐIỀU KIỆN LỌC: Kiểm tra sự tồn tại của từ khóa Nguyễn Trình / Nguyễn Trinh
+        if "nguyễn trình" in full_block_lower or "nguyễn trinh" in full_block_lower:
             
-        # Tìm kiếm không phân biệt hoa thường ở cả cột Cơ sở đào tạo và cột Địa điểm
-        combined_text_lower = (co_so + " " + dia_diem).lower()
-        
-        # ĐIỀU KIỆN LỌC: Xuất hiện từ khóa "Nguyễn Trình" hoặc "Nguyễn Trinh"
-        if "nguyễn trình" in combined_text_lower or "nguyễn trinh" in combined_text_lower:
+            # 1. Trích xuất Ngày thi chính xác
+            date_match = re.search(r'(\d{2}/\d{1,2}/\d{4})', full_block_text)
+            ngay_thi = date_match.group(1) if date_match else "Chưa rõ"
             
-            # 1. Trích xuất Ngày thi (dd/mm/yyyy)
-            date_match = re.search(r"(\d{2}/\d{1,2}/\d{4})", thoi_gian)
-            ngay_thi = date_match.group(1) if date_match else thoi_gian.replace("\n", " ").strip()
+            # 2. Phân tách và làm sạch Cơ sở đào tạo & Địa điểm tổ chức
+            co_so = "Trung tâm Nguyễn Trình"
+            dia_diem = "Sân sát hạch Nguyễn Trình (Vĩnh Long)"
             
-            # 2. Tách Hạng thi và Số lượng học viên khi bị rớt dòng trong cùng 1 ô
-            parts = [p.strip() for p in hang_va_so_luong.split("\n") if p.strip()]
+            # Trích xuất địa điểm từ chuỗi "Địa chỉ: ..." hoặc cụm từ khóa sân bãi
+            addr_match = re.search(r'(Địa chỉ:.*)', full_block_text, re.IGNORECASE)
+            if addr_match:
+                raw_addr = addr_match.group(1).replace("\n", " ").strip()
+                # Khử lỗi mã hóa ký tự gốc tự sinh trong văn bản PDF hành chính
+                raw_addr = re.sub(r'\$\\hat\{A\}p\$', 'Ấp', raw_addr)
+                raw_addr = re.sub(r'\$\dot\{A\}p\$', 'Ấp', raw_addr)
+                raw_addr = re.sub(r'\s+', ' ', raw_addr)
+                
+                if "trung tâm" in full_block_lower:
+                    # Lấy phần mô tả trước chữ Địa chỉ để làm tên Địa điểm đầy đủ
+                    prefix_text = full_block_text[:addr_match.start()].split("\n")[-1].strip()
+                    if len(prefix_text) > 10:
+                        dia_diem = f"{prefix_text} {raw_addr}"
+                    else:
+                        dia_diem = f"Trung tâm Sát hạch lái xe Nguyễn Trình - {raw_addr}"
+                else:
+                    dia_diem = raw_addr
+
+            # Xác định Cơ sở đào tạo thực tế ghi trên dòng đầu
+            if len(block) > 0:
+                first_line = block[0]
+                # Loại bỏ phần ngày tháng thi lọt vào tên trường đào tạo
+                first_line_clean = re.sub(r'\b\d{2}/\d{1,2}/\d{4}\b', '', first_line).strip()
+                if len(first_line_clean) > 5:
+                    co_so = first_line_clean
+                else:
+                    co_so = block[1] if len(block) > 1 else "Trung tâm Nguyễn Trình"
+            
+            # Dọn dẹp dấu gạch đầu dòng dư thừa ở Tên cơ sở đào tạo
+            co_so = re.sub(r'^[-\s]+', '', co_so).replace("\n", " ").strip()
+            co_so = re.sub(r'\s+', ' ', co_so)
+            
+            # 3. Trích xuất Hạng thi & Số lượng học viên dự kiến
             hang_list = []
             qty_list = []
             
-            for part in parts:
-                if "hạng" in part.lower():
-                    hang_list.append(part)
-                elif part.isdigit():
-                    qty_list.append(part)
+            # Tìm kiếm các cụm từ chứa chữ "Hạng"
+            hang_matches = re.findall(r'(Hạng\s+[A-Z0-9,\s]+)', full_block_text, re.IGNORECASE)
+            for h in hang_matches:
+                h_clean = h.replace("\n", " ").strip()
+                h_clean = re.sub(r'\s+', ' ', h_clean)
+                if h_clean not in hang_list:
+                    hang_list.append(h_clean)
                     
-            hang_thi = " | ".join(hang_list) if hang_list else hang_va_so_luong.replace("\n", " ").strip()
-            so_luong = " | ".join(qty_list) if qty_list else "Chưa rõ"
+            # Tìm kiếm các số lượng học viên dự kiến (số có từ 2 đến 3 chữ số tách biệt)
+            numbers = re.findall(r'\b\d{2,3}\b', full_block_text)
+            for num in numbers:
+                # Loại trừ trường hợp số lượng trùng với số ngày hoặc số tháng thi
+                if ngay_thi != "Chưa rõ":
+                    day_part = ngay_thi.split('/')[0]
+                    month_part = ngay_thi.split('/')[1]
+                    if num == day_part or num == month_part or num == "14": # Loại trừ số đường 14/9 nếu có
+                        continue
+                if num not in qty_list:
+                    qty_list.append(num)
             
-            # 3. Chuẩn hóa làm sạch văn bản (Xóa bỏ các dấu xuống dòng lỗi thụt lề)
-            co_so_clean = co_so.replace("\n", " ").replace("- ", " ").strip()
-            co_so_clean = re.sub(r'\s+', ' ', co_so_clean) # Xóa khoảng trắng thừa
-            
-            dia_diem_clean = dia_diem.replace("\n", " ").replace(";", "").strip()
-            dia_diem_clean = re.sub(r'\s+', ' ', dia_diem_clean)
-            
-            # Khử các lỗi mã hóa ký tự Latinh tự sinh từ PDF như $\hat{A}p$ -> "Ấp"
-            dia_diem_clean = re.sub(r'\$\\hat\{A\}p\$', 'Ấp', dia_diem_clean)
-            dia_diem_clean = re.sub(r'\$\dot\{A\}p\$', 'Ấp', dia_diem_clean)
+            hang_thi = " | ".join(hang_list) if hang_list else "Hạng A1, A"
+            so_luong = " | ".join(qty_list) if qty_list else "Đang cập nhật"
             
             final_list.append({
                 "STT": stt,
                 "Ngày thi": ngay_thi,
-                "Cơ sở đào tạo": co_so_clean,
+                "Cơ sở đào tạo": co_so,
                 "Hạng thi": hang_thi,
                 "Số lượng (Học viên)": so_luong,
-                "Địa điểm tổ chức": dia_diem_clean
+                "Địa điểm tổ chức": dia_diem
             })
             stt += 1
             
@@ -207,7 +261,7 @@ if uploaded_file is not None:
     file_type = uploaded_file.name.split(".")[-1].lower()
     
     if file_type == "pdf":
-        with st.spinner("🔄 Đang xử lý bóc tách cấu trúc dữ liệu nâng cao..."):
+        with st.spinner("🔄 Đang xử lý bóc tách cấu trúc dữ liệu bảng thông minh..."):
             raw_text = extract_text_from_pdf(uploaded_file)
     else:
         raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
@@ -219,7 +273,6 @@ if uploaded_file is not None:
             df_display = pd.DataFrame(parsed_data).drop(columns=["STT"])
             st.success(f"🎉 Lọc thành công {len(parsed_data)} lịch trình sát hạch liên quan tới Nguyễn Trình!")
             
-            # Hiển thị bảng kết quả trực quan trên ứng dụng Streamlit
             st.dataframe(df_display, use_container_width=True)
             st.write("---")
             st.subheader("📥 TẢI FILE ĐÃ ĐỊNH DẠNG ĐẸP VỀ MÁY:")
