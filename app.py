@@ -7,9 +7,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 from docx import Document
-from docx.shared import Pt, Inches
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
+from docx.shared import Pt
 
 # Cấu hình giao diện trang web
 st.set_page_config(page_title="Bộ Lọc Lịch Sát Hạch Nguyễn Trình", layout="wide")
@@ -41,60 +39,70 @@ def parse_pdf_content(raw_text):
     data_rows = []
     current_row = None
     
-    for i, line in enumerate(lines):
+    # Gom cụm các dòng: Mỗi khi gặp một ngày thi mới (dd/mm/yyyy) thì coi như bắt đầu một mục lịch thi mới
+    for line in lines:
         date_match = re.search(r"(\d{2}/\d{1,2}/\d{4})", line)
         if date_match:
             if current_row:
                 data_rows.append(current_row)
             ngay_thi = date_match.group(1)
-            content_cleaned = line.replace(ngay_thi, "").strip()
+            # Giữ lại toàn bộ text của dòng chứa ngày
             current_row = {
                 "Ngày thi": ngay_thi,
-                "Nội dung thô": content_cleaned,
-                "Chỉ số dòng": i
+                "Nội dung tích lũy": line 
             }
         else:
             if current_row:
-                current_row["Nội dung thô"] += " " + line
+                current_row["Nội dung tích lũy"] += " " + line
                 
     if current_row:
         data_rows.append(current_row)
         
     final_list = []
     stt = 1
+    
+    # Duyệt qua từng cụm thông tin để bóc tách thông minh
     for row in data_rows:
-        text_full = row["Nội dung thô"]
-        idx = row["Chỉ số dòng"]
+        text_full = row["Nội dung tích lũy"]
+        text_lower = text_full.lower()
         
-        if "Nguyễn Trình" in text_full:
-            # Thuật toán quét ngược/xuôi tìm Cơ sở đào tạo thực tế trong file PDF gốc
+        # Kiểm tra xem cụm này có chứa từ khóa Nguyễn Trình (không phân biệt hoa thường) hay không
+        if "nguyễn trình" in text_lower:
+            
+            # 1. Xác định Cơ sở đào tạo thực tế dựa trên text tích lũy
             co_so = "Trung tâm Nguyễn Trình"
-            hang_thi = "Chưa rõ"
-            so_luong = "Đang cập nhật"
+            if "hưng thịnh" in text_lower:
+                co_so = "Trung tâm GDNN và SHLX Hưng Thịnh"
+            elif "minh mẫn" in text_lower:
+                co_so = "Nguyễn Trình & Mô tô Minh Mẫn"
+            
+            # 2. Tìm hạng thi bằng Regex (Ví dụ: Hạng A1, Hạng B2, Hạng C...)
+            hang_match = re.search(r"(Hạng\s+[A-Z0-9,\s]+)", text_full, re.IGNORECASE)
+            if hang_match:
+                hang_thi = hang_match.group(1).strip()
+            else:
+                hang_thi = "Hạng A1, A"  # Giá trị mặc định nếu không tìm thấy chữ Hạng
+            
+            # 3. Tìm số lượng học viên thông minh hơn
+            # Tìm tất cả các số có từ 2 đến 3 chữ số
+            qty_candidates = re.findall(r"\b\d{2,3}\b", text_full)
+            so_luong = "650" # Mặc định
+            if qty_candidates:
+                # Thường số lượng người thi sẽ đứng gần chữ "học viên", "thí sinh" hoặc nằm cuối cụm thông tin
+                # Loại bỏ số ngày thi (nếu trùng) bằng cách lấy số cuối cùng không trùng với ngày/tháng/năm
+                for num in reversed(qty_candidates):
+                    if num not in row["Ngày thi"]:
+                        so_luong = num
+                        break
+
             dia_diem = "Sân sát hạch Nguyễn Trình (Châu Thành, Vĩnh Long)"
             
-            # Quét tìm hạng xe và số lượng
-            for offset in range(-3, 2):
-                if 0 <= idx + offset < len(lines):
-                    check_text = lines[idx + offset]
-                    if "Hưng Thịnh" in check_text:
-                        co_so = "Trung tâm GDNN và SHLX Hưng Thịnh"
-                    elif "Minh Mẫn" in check_text:
-                        co_so = "Nguyễn Trình & Mô tô Minh Mẫn"
-                    
-                    if "Hạng" in check_text and hang_thi == "Chưa rõ":
-                        hang_thi = check_text.strip()
-                    
-                    qty_match = re.findall(r"\b\d{2,3}\b", check_text)
-                    if qty_match and so_luong == "Đang cập nhật":
-                        so_luong = qty_match[-1]
-
             final_list.append({
                 "STT": stt,
                 "Ngày thi": row["Ngày thi"],
                 "Cơ sở đào tạo": co_so,
-                "Hạng thi": hang_thi if hang_thi != "Chưa rõ" else "Hạng A1, A",
-                "Số lượng (Học viên)": so_luong if so_luong != "Đang cập nhật" else "650",
+                "Hạng thi": hang_thi,
+                "Số lượng (Học viên)": so_luong,
                 "Địa điểm tổ chức": dia_diem
             })
             stt += 1
@@ -102,7 +110,6 @@ def parse_pdf_content(raw_text):
     return final_list
 
 def export_to_excel(data):
-    """Hàm tạo file Excel kẻ ô đẹp mắt, tự động giãn cột"""
     wb = Workbook()
     ws = wb.active
     ws.title = "Lịch Sát Hạch Nguyễn Trình"
@@ -111,7 +118,6 @@ def export_to_excel(data):
     headers = ["STT", "Ngày thi", "Cơ sở đào tạo", "Hạng thi", "Số lượng (Học viên)", "Địa điểm tổ chức"]
     ws.append(headers)
     
-    # Định dạng Header (Màu xanh đậm, chữ trắng, căn giữa)
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
     header_font = Font(name="Times New Roman", size=12, bold=True, color="FFFFFF")
     center_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -131,13 +137,11 @@ def export_to_excel(data):
         cell.alignment = center_align
         cell.border = thin_border
         
-    # Thêm dữ liệu và định dạng từng dòng
     data_font = Font(name="Times New Roman", size=11)
     for row_idx, row_data in enumerate(data, 2):
         row_values = [row_data["STT"], row_data["Ngày thi"], row_data["Cơ sở đào tạo"], row_data["Hạng thi"], row_data["Số lượng (Học viên)"], row_data["Địa điểm tổ chức"]]
         ws.append(row_values)
         
-        # Đổ màu xen kẽ nhẹ (Zebra striping) cho dễ nhìn
         row_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid") if row_idx % 2 == 0 else PatternFill(fill_type=None)
         
         for col_idx in range(1, len(headers) + 1):
@@ -147,15 +151,13 @@ def export_to_excel(data):
             if row_fill.fill_type:
                 cell.fill = row_fill
             
-            # Căn lề thích hợp theo cột
-            if col_idx in [1, 2, 5]:  # STT, Ngày thi, Số lượng
+            if col_idx in [1, 2, 5]:
                 cell.alignment = center_align
             else:
                 cell.alignment = left_align
                 
     ws.row_dimensions[1].height = 28
     
-    # Tự động căn chỉnh độ rộng cột chuẩn xác
     for col in ws.columns:
         max_len = 0
         col_letter = get_column_letter(col[0].column)
@@ -169,10 +171,7 @@ def export_to_excel(data):
     return output.getvalue()
 
 def export_to_word(data):
-    """Hàm tạo file Word chứa bảng kẻ ô chuẩn văn bản hành chính"""
     doc = Document()
-    
-    # Đặt font chữ mặc định cho toàn văn bản là Times New Roman
     style = doc.styles['Normal']
     font = style.font
     font.name = 'Times New Roman'
@@ -182,18 +181,17 @@ def export_to_word(data):
     run = title.add_run("THÔNG BÁO LỊCH SÁT HẠCH LÁI XE - TRUNG TÂM NGUYỄN TRÌNH")
     run.bold = True
     run.font.size = Pt(14)
-    title.alignment = 1 # Căn giữa
+    title.alignment = 1 
     
-    # Tạo bảng
     headers = ["STT", "Ngày thi", "Cơ sở đào tạo", "Hạng thi", "Số lượng", "Địa điểm tổ chức"]
     table = doc.add_table(rows=1, cols=len(headers))
-    table.style = 'Table Grid' # Kẻ khung rõ ràng từng ô
+    table.style = 'Table Grid'
     
     hdr_cells = table.rows[0].cells
     for i, header in enumerate(headers):
         hdr_cells[i].text = header
         hdr_cells[i].paragraphs[0].runs[0].font.bold = True
-        hdr_cells[i].paragraphs[0].alignment = 1 # Căn giữa tiêu đề bảng
+        hdr_cells[i].paragraphs[0].alignment = 1 
         
     for item in data:
         row_cells = table.add_row().cells
@@ -204,12 +202,11 @@ def export_to_word(data):
         row_cells[4].text = str(item["Số lượng (Học viên)"])
         row_cells[5].text = item["Địa điểm tổ chức"]
         
-        # Định dạng căn lề cho dữ liệu trong ô
         for i in range(len(headers)):
             if i in [0, 1, 4]:
-                row_cells[i].paragraphs[0].alignment = 1 # Căn giữa
+                row_cells[i].paragraphs[0].alignment = 1 
             else:
-                row_cells[i].paragraphs[0].alignment = 0 # Căn trái
+                row_cells[i].paragraphs[0].alignment = 0 
                 
     output = io.BytesIO()
     doc.save(output)
@@ -219,7 +216,7 @@ if uploaded_file is not None:
     file_type = uploaded_file.name.split(".")[-1].lower()
     
     if file_type == "pdf":
-        with st.spinner("🔄 Đang xử lý bóc tách nâng cao..."):
+        with st.spinner("🔄 Đang xử lý bóc tách dữ liệu thông minh..."):
             raw_text = extract_text_from_pdf(uploaded_file)
     else:
         raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
@@ -229,15 +226,12 @@ if uploaded_file is not None:
         
         if parsed_data:
             df_display = pd.DataFrame(parsed_data).drop(columns=["STT"])
-            st.success(f"🎉 Lọc thành công lịch thi của Trung tâm Nguyễn Trình!")
+            st.success(f"🎉 Lọc thành công {len(parsed_data)} lịch thi liên quan đến Nguyễn Trình!")
             
-            # Hiển thị trực quan trên Web
             st.dataframe(df_display, use_container_width=True)
-            
             st.write("---")
             st.subheader("📥 TẢI FILE ĐÃ ĐỊNH DẠNG ĐẸP VỀ MÁY:")
             
-            # Tạo hai nút tải file riêng biệt
             excel_bytes = export_to_excel(parsed_data)
             word_bytes = export_to_word(parsed_data)
             
@@ -246,7 +240,7 @@ if uploaded_file is not None:
                 st.download_button(
                     label="🟢 Tải file EXCEL (.xlsx) - Đã kẻ ô & giãn cột",
                     data=excel_bytes,
-                    file_name="Lich_Thi_Nguyen_Trinh_Kẻ_Ô.xlsx",
+                    file_name="Lich_Thi_Nguyen_Trinh_Ke_O.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             with col2:
@@ -257,4 +251,4 @@ if uploaded_file is not None:
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
         else:
-            st.warning("⚠️ Không tìm thấy thông tin lịch thi liên quan đến Nguyễn Trình.")
+            st.warning("⚠️ Không tìm thấy thông tin lịch thi liên quan đến Nguyễn Trình. Vui lòng kiểm tra lại file PDF.")
