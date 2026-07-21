@@ -20,7 +20,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-title">📊 HỆ THỐNG LỌC LỊCH SÁT HẠCH TỰ ĐỘNG</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Bóc tách chuẩn xác 100% Cơ sở đào tạo ghép & Địa điểm tại Nguyễn Trình</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Xử lý triệt để đợt thi có từ 2 Cơ sở đào tạo ghép chung</div>', unsafe_allow_html=True)
 st.write("---")
 
 uploaded_file = st.file_uploader("Kéo và thả file PDF Thông báo lịch sát hạch vào đây:", type=["pdf", "txt"])
@@ -39,14 +39,12 @@ def parse_pdf_content(raw_text):
     text_clean = re.sub(r'\$\\hat\{A\}p\$', 'Ấp', raw_text)
     
     # 2. Định vị vị trí bắt đầu của các Số Thứ Tự trong bảng (01, 02, ..., 29)
-    # Tìm mô hình STT nằm ở đầu dòng hoặc sau dấu xuống dòng
     stt_matches = list(re.finditer(r'(?:^|\n)\s*(\d{2})\s*(?=\||\s+[T|C|K|P|H|Q|X])', text_clean))
     
     blocks = []
     for i in range(len(stt_matches)):
         start_pos = stt_matches[i].start()
         end_pos = stt_matches[i+1].start() if i + 1 < len(stt_matches) else len(text_clean)
-        # Lấy trọn vẹn khối văn bản của 1 STT
         block_text = text_clean[start_pos:end_pos].strip()
         blocks.append(block_text)
 
@@ -64,7 +62,6 @@ def parse_pdf_content(raw_text):
         # ---------------------------------------------------------------------
         # 1. KIỂM TRA ĐỊA ĐIỂM TỔ CHỨC (BẮT BUỘC PHẢI LÀ NGUYỄN TRÌNH)
         # ---------------------------------------------------------------------
-        # Tách lấy đoạn văn bản phần Địa điểm tổ chức (thường nằm ở cuối khối hoặc sau chữ Địa chỉ/Sân)
         idx_addr = block.find("Địa chỉ:")
         if idx_addr != -1:
             site_text = block[idx_addr:]
@@ -73,7 +70,6 @@ def parse_pdf_content(raw_text):
         else:
             site_text = block
 
-        # Chỉ lọc những đợt thi mà địa điểm ghi Nguyễn Trình hoặc Ấp Giồng Trôm
         is_nguyen_trinh_site = (
             "nguyễn trình" in site_text.lower() or 
             "nguyễn trinh" in site_text.lower() or 
@@ -84,53 +80,65 @@ def parse_pdf_content(raw_text):
             continue
 
         # ---------------------------------------------------------------------
-        # 2. BÓC TÁCH CHÍNH XÁC & ĐẦY ĐỦ TẤT CẢ CƠ SỞ ĐÀO TẠO
+        # 2. BÓC TÁCH CHÍNH XÁC TẤT CẢ CƠ SỞ ĐÀO TẠO (KỂ CẢ CƠ SỞ GHÉP/NHIỀU DÒNG)
         # ---------------------------------------------------------------------
-        co_so_text = ""
-        if "|" in block:
-            parts = [p.strip() for p in block.split('|')]
-            # Phần cột chứa cơ sở đào tạo
-            co_so_text = parts[0]
-            # Nếu phần kế tiếp vẫn thuộc cột cơ sở đào tạo (chưa chứa Hạng / Ngày)
-            if len(parts) > 1 and not re.search(r'Hạng\s+', parts[1], re.IGNORECASE) and not re.search(r'\d{2}/\d{1,2}/\d{4}', parts[1]):
-                co_so_text += "\n" + parts[1]
-        else:
-            idx_hang = block.find("Hạng")
-            co_so_text = block[:idx_hang] if idx_hang != -1 else block
-
-        # Làm sạch STT đầu dòng
-        co_so_text = re.sub(r'^\s*\d{2}\s*\|?\s*', '', co_so_text).strip()
+        # Lấy phần văn bản đứng trước Ngày thi để bóc tách tên các cơ sở
+        idx_date = block.find(ngay_thi)
+        text_before_date = block[:idx_date] if idx_date != -1 else block
         
-        # Lấy từng dòng cơ sở đào tạo, loại bỏ thông tin rác
-        raw_lines = co_so_text.split('\n')
-        clean_cs_list = []
-        for line in raw_lines:
-            line_str = line.strip()
-            line_str = re.sub(r'^\s*[-–\.\,\|]*\s*', '', line_str).strip()
-            if len(line_str) > 3 and "địa chỉ" not in line_str.lower() and "hạng" not in line_str.lower():
-                clean_cs_list.append(line_str)
+        # Danh sách từ khóa nhận diện các đơn vị đào tạo
+        entity_patterns = [
+            r'Trung tâm GDNN[^\n|]+',
+            r'Trung tâm đào tạo[^\n|]+',
+            r'Trung tâm quản lý[^\n|]+',
+            r'Công ty Cổ phần[^\n|]+',
+            r'Công ty TNHH[^\n|]+',
+            r'Trường Cao đẳng[^\n|]+',
+            r'Khoa giao thông[^\n|]+',
+            r'Quá hạn GPLX[^\n|]*',
+            r'Bến xe[^\n|]*'
+        ]
+        
+        cs_found = []
+        for pat in entity_patterns:
+            matches = re.findall(pat, text_before_date, re.IGNORECASE)
+            for m in matches:
+                m_clean = re.sub(r'^\s*[-–\.\,\|]*\s*', '', m).strip()
+                # Loại bỏ phần dính chữ Hạng hoặc số lượng
+                m_clean = re.sub(r'\s+Hạng.*$', '', m_clean, flags=re.IGNORECASE)
+                m_clean = re.sub(r'\s+\d{2,4}\b.*$', '', m_clean)
+                if len(m_clean) > 3 and "địa chỉ" not in m_clean.lower() and m_clean not in cs_found:
+                    cs_found.append(m_clean)
+        
+        # Nếu phương pháp từ khóa không lấy được, dùng cách cắt theo dấu | hoặc dòng
+        if not cs_found:
+            if "|" in text_before_date:
+                parts = [p.strip() for p in text_before_date.split('|')]
+                for p in parts[:2]:
+                    p_clean = re.sub(r'^\s*\d{2}\s*', '', p).strip()
+                    if len(p_clean) > 3 and "hạng" not in p_clean.lower():
+                        cs_found.append(p_clean)
 
-        co_so_final = " - ".join(clean_cs_list)
-        co_so_final = re.sub(r'\s+', ' ', co_so_final)
-        co_so_final = re.sub(r'-\s*-', '-', co_so_final).strip(" -")
-
+        # Chuẩn hóa ghép tên các cơ sở bằng dấu " - "
+        co_so_final = " - ".join(cs_found)
+        co_so_final = re.sub(r'\s+', ' ', co_so_final).strip(" -")
+        
         if not co_so_final:
             co_so_final = "Trung tâm GDNN và SHLX Nguyễn Trình"
 
         # ---------------------------------------------------------------------
-        # 3. TRÍCH XUẤT SỐ LƯỢNG HỌC VIÊN CHÍNH XÁC (3-4 CHỮ SỐ)
+        # 3. TRÍCH XUẤT SỐ LƯỢNG HỌC VIÊN CHÍNH XÁC (650, 700, 240, 250...)
         # ---------------------------------------------------------------------
         day_str = ngay_thi.split('/')[0]
         month_str = ngay_thi.split('/')[1]
         
-        # Số lượng trong thông báo luôn là các con số như 650, 700, 250, 240, 800...
         numbers_found = re.findall(r'\b\d{2,4}\b', block)
         so_luong = "Chưa rõ"
         
         for num in numbers_found:
-            # Loại trừ năm 2026, ngày thi, tháng thi, và các số STT
-            if num not in ["2026", day_str, month_str, "14", "24"] and len(num) >= 2:
-                if int(num) >= 50: # Số lượng lớp học viên luôn >= 50
+            # Loại trừ các con số hệ thống (năm 2026, ngày/tháng thi, số STT 14, 24)
+            if num not in ["2026", day_str, month_str, "14", "24"]:
+                if int(num) >= 50:  # Quy mô học viên sát hạch luôn từ 50 trở lên
                     so_luong = num
                     break
 
@@ -141,7 +149,7 @@ def parse_pdf_content(raw_text):
         hang_xe = hang_match.group(1).strip() if hang_match else "Hạng A1, A"
         hang_xe = re.sub(r'\s+', ' ', hang_xe)
 
-        # Đưa vào kết quả hiển thị
+        # Đưa vào danh sách kết quả hiển thị
         final_list.append({
             "STT": stt_counter,
             "Ngày thi": ngay_thi,
