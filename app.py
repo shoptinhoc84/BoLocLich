@@ -9,7 +9,7 @@ from openpyxl.utils import get_column_letter
 from docx import Document
 from docx.shared import Pt
 
-# Cấu hình giao diện chuẩn hóa - Bỏ layout="wide" để tránh kích hoạt ngầm tham số cũ
+# Cấu hình giao diện chuẩn hóa
 st.set_page_config(page_title="Bộ Lọc Lịch Sát Hạch Nguyễn Trình")
 
 st.markdown("""
@@ -20,7 +20,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-title">📊 HỆ THỐNG LỌC LỊCH SÁT HẠCH TỰ ĐỘNG</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Cập nhật cấu trúc Streamlit 2026 - Tối ưu hóa xử lý bảng hành chính</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Tối ưu hóa bóc tách bảng lịch sát hạch công an tỉnh Vĩnh Long</div>', unsafe_allow_html=True)
 st.write("---")
 
 uploaded_file = st.file_uploader("Kéo và thả file PDF Thông báo lịch sát hạch vào đây:", type=["pdf", "txt"])
@@ -35,90 +35,80 @@ def extract_text_from_pdf(file):
     return full_text
 
 def parse_pdf_content(raw_text):
-    # Phẳng hóa văn bản để loại bỏ hoàn toàn các ký tự ngắt dòng gây treo dữ liệu bảng
-    text_flat = raw_text.replace('\r\n', ' ').replace('\n', ' ')
-    text_flat = text_flat.replace('"', '').replace(' , ', ' ')
-    text_flat = re.sub(r'\s+', ' ', text_flat)
+    """
+    Bóc tách chính xác từng dòng theo cấu trúc bảng công văn
+    """
+    # Làm sạch latex ký tự đặc biệt
+    text_clean = re.sub(r'\$\\hat\{A\}p\$', 'Ấp', raw_text)
     
-    # Định vị các mỏ neo dựa trên ngày tháng thi
-    date_positions = [m.start() for m in re.finditer(r'\b\d{2}/\d{1,2}/\d{4}\b', text_flat)]
-    
-    if not date_positions:
-        return []
-        
-    blocks = []
-    start_pos = 0
-    for pos in date_positions:
-        chunk_start = max(0, start_pos - 300) if start_pos > 0 else 0
-        blocks.append(text_flat[chunk_start:pos + 500])
-        start_pos = pos
-    blocks.append(text_flat[max(0, start_pos - 300):])
+    # Chia nhỏ văn bản thành từng dòng/mục dựa vào số Thứ tự (STT 01 -> 30)
+    # Tìm mô hình dòng bắt đầu bằng STT 2 chữ số (ví dụ: 01 |, 02 |, 13 |)
+    pattern = r'(?=\b\d{2}\s*\||\n\d{2}\s+)'
+    items = re.split(pattern, text_clean)
     
     final_list = []
     stt_counter = 1
-    seen_dates = set() 
     
-    for block in blocks:
-        block_lower = block.lower()
+    for item in items:
+        # Làm sạch khoảng trắng thừa trong mục
+        item_single_line = re.sub(r'\s+', ' ', item).strip()
         
-        # Chỉ lọc các khối có chứa từ khóa Nguyễn Trình hoặc Nguyễn Trinh
-        if "nguyễn trình" in block_lower or "nguyễn trinh" in block_lower:
+        # Chỉ xử lý nếu trong mục này có nhắc đến "Nguyễn Trình" hoặc "Nguyễn Trinh"
+        if "nguyễn trình" in item_single_line.lower() or "nguyễn trinh" in item_single_line.lower():
             
-            date_match = re.search(r'(\d{2}/\d{1,2}/\d{4})', block)
+            # Trích xuất Ngày thi
+            date_match = re.search(r'(\d{2}/\d{1,2}/\d{4})', item_single_line)
             if not date_match:
                 continue
             ngay_thi = date_match.group(1)
             
-            unique_key = f"{ngay_thi}_{block[:50]}"
-            if unique_key in seen_dates:
-                continue
-            seen_dates.add(unique_key)
+            # Tách các cột dựa trên dấu '|' nếu là file OCR/Text chuẩn bảng
+            parts = [p.strip() for p in item_single_line.split('|')]
             
-            # Trích xuất Cơ sở đào tạo
-            co_so = "Trung tâm Nguyễn Trình"
-            text_before_date = block[:block.find(ngay_thi)]
+            co_so = ""
+            hang_xe = ""
+            so_luong = ""
+            dia_diem = ""
             
-            cs_matches = re.findall(r'(Trung tâm GDNN[^\,]*|Trung tâm đào tạo[^\,]*|Công ty Cổ phần[^\,]*|Trung tâm KTNV[^\,]*)', text_before_date, re.IGNORECASE)
-            if cs_matches:
-                candidate = cs_matches[-1].strip()
-                candidate = re.sub(r'^[-–\s\.,\|]+', '', candidate).strip()
-                if len(candidate) > 10 and "hạng" not in candidate.lower():
-                    co_so = candidate
-            
-            # Trích xuất Hạng xe
-            hang_candidates = []
-            hang_matches = re.findall(r'(Hạng\s+[A-Z0-9,\s\-\/]+)', block, re.IGNORECASE)
-            for h in hang_matches:
-                h_clean = re.sub(r'\s+', ' ', h).strip()
-                if len(h_clean) < 40 and h_clean not in hang_candidates:
-                    hang_candidates.append(h_clean)
-            hang_xe = " | ".join(hang_candidates) if hang_candidates else "Hạng A1, A"
-            
-            # Trích xuất Số lượng học viên
-            qty_candidates = []
-            numbers = re.findall(r'\b\d{2,3}\b', block)
-            for num in numbers:
-                day_part = ngay_thi.split('/')[0]
-                month_part = ngay_thi.split('/')[1]
-                if num != day_part and num != month_part and num != "14" and num != "24":
-                    if num not in qty_candidates:
-                        qty_candidates.append(num)
-            so_luong = " | ".join(qty_candidates) if qty_candidates else "Đang cập nhật"
-            
-            # Trích xuất Địa điểm tổ chức
-            dia_diem = "Trung tâm Sát hạch lái xe Nguyễn Trình (Vĩnh Long)"
-            addr_match = re.search(r'(Địa chỉ:[^.]*)', block, re.IGNORECASE)
-            if addr_match:
-                dia_diem_raw = addr_match.group(1).strip()
-                dia_diem_raw = re.sub(r'\$\\hat\{A\}p\$', 'Ấp', dia_diem_raw)
-                dia_diem = re.sub(r'\s+', ' ', dia_diem_raw)
+            if len(parts) >= 4:
+                # Nếu chuỗi phân cột chuẩn dạng: STT | Cơ sở | Hạng & SL | Ngày | Địa điểm
+                co_so = re.sub(r'^\d{2}\s*', '', parts[0]).strip()
                 
-            co_so_clean = re.sub(r'\s+', ' ', co_so).strip()
+                # Cột hạng & số lượng
+                hang_sl = parts[1]
+                hang_match = re.search(r'(Hạng\s+[A-Z0-9,\s\-]+)', hang_sl, re.IGNORECASE)
+                hang_xe = hang_match.group(1).strip() if hang_match else "Hạng A1, A"
+                
+                sl_match = re.search(r'\b(\d{2,4})\b', hang_sl)
+                so_luong = sl_match.group(1) if sl_match else "Chưa rõ"
+                
+                dia_diem = parts[-1] if len(parts) >= 5 else "Trung tâm GDNN và SHLX Nguyễn Trình"
+            else:
+                # Phân tích dự phòng bằng Regex chuẩn cho đoạn không có |
+                cs_match = re.search(r'(Trung tâm [^Hạng]+|Công ty [^Hạng]+|Khoa [^Hạng]+)', item_single_line, re.IGNORECASE)
+                co_so = cs_match.group(1).strip() if cs_match else "Trung tâm GDNN và SHLX Nguyễn Trình"
+                
+                hang_match = re.search(r'(Hạng\s+[A-Z0-9,\s\-]+)', item_single_line, re.IGNORECASE)
+                hang_xe = hang_match.group(1).strip() if hang_match else "Hạng A1, A"
+                
+                # Tìm số lượng học viên (thường đứng trước ngày thi)
+                qty_match = re.search(r'\b(\d{2,4})\s*(?=\||\s*\d{2}/\d{1,2}/\d{4})', item_single_line)
+                so_luong = qty_match.group(1) if qty_match else "Chưa rõ"
+                
+                # Lấy địa điểm
+                if "Địa chỉ:" in item_single_line:
+                    dia_diem = item_single_line[item_single_line.find("Địa chỉ:"):].strip()
+                else:
+                    dia_diem = "Trung tâm GDNN và SHLX Nguyễn Trình (Ấp Giồng Trôm, xã Châu Thành, Vĩnh Long)"
+            
+            # Làm sạch đẹp lại dữ liệu cột
+            co_so = re.sub(r'^\d{2}\s*', '', co_so).strip()
+            dia_diem = re.sub(r'\s+', ' ', dia_diem).strip()
             
             final_list.append({
                 "STT": stt_counter,
                 "Ngày thi": ngay_thi,
-                "Cơ sở đào tạo": co_so_clean,
+                "Cơ sở đào tạo": co_so if co_so else "Trung tâm GDNN và SHLX Nguyễn Trình",
                 "Hạng thi": hang_xe,
                 "Số lượng (Học viên)": so_luong,
                 "Địa điểm tổ chức": dia_diem
@@ -244,10 +234,9 @@ if uploaded_file is not None:
         
         if parsed_data:
             df_display = pd.DataFrame(parsed_data).drop(columns=["STT"])
-            st.success(f"🎉 Xuất sắc! Hệ thống đã lọc thành công {len(parsed_data)} lịch thi.")
+            st.success(f"🎉 Lọc thành công {len(parsed_data)} lịch thi liên quan đến Nguyễn Trình!")
             
-            # Giải pháp an toàn tuyệt đối: Loại bỏ hoàn toàn tham số chiều rộng tùy biến để tránh xung đột thư viện
-            st.dataframe(df_display)
+            st.dataframe(df_display, use_container_width=True)
             
             st.write("---")
             st.subheader("📥 TẢI FILE ĐÃ ĐỊNH DẠNG ĐẸP VỀ MÁY:")
@@ -260,14 +249,14 @@ if uploaded_file is not None:
                 st.download_button(
                     label="🟢 Tải file EXCEL (.xlsx)",
                     data=excel_bytes,
-                    file_name="Lich_Thi_Nguyen_Trinh.xlsx",
+                    file_name="Lich_Thi_Nguyen_Trinh_Thang_8_2026.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             with col2:
                 st.download_button(
                     label="🔵 Tải file WORD (.docx)",
                     data=word_bytes,
-                    file_name="Lich_Thi_Nguyen_Trinh.docx",
+                    file_name="Lich_Thi_Nguyen_Trinh_Thang_8_2026.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
         else:
